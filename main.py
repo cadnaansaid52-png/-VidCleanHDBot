@@ -32,6 +32,7 @@ class AdminStates(StatesGroup):
     waiting_for_broadcast = State()
     waiting_for_limit = State()
     waiting_for_new_admin = State()
+    waiting_for_welcome_text = State() # Xaaladda cusub ee beddelka qoraalka
 
 # ==========================================
 # 1. DATABASE (SQLite)
@@ -45,9 +46,18 @@ async def init_db():
         await db.execute('''CREATE TABLE IF NOT EXISTS admins 
                             (admin_id INTEGER PRIMARY KEY)''')
         
+        # Qoraalka asalka ah ee Welcome
+        default_welcome = (
+            "👋 Welcome <b>{name}</b> to <b>VidClean HD</b>!\n\n"
+            "Your premium tool to download TikTok videos in high quality, completely without watermarks. 🚀\n\n"
+            "You can also subscribe to our channel to get the latest news about bot status, updates and news!\n"
+            "📢 {channel}"
+        )
+        
         await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("force_channel", "@cadnaanchannel")')
         await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("download_limit", "3")')
         await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("total_links_downloaded", "0")')
+        await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("welcome_text", ?)', (default_welcome,))
         await db.execute('INSERT OR IGNORE INTO admins (admin_id) VALUES (?)', (MASTER_ADMIN,))
         await db.commit()
 
@@ -77,34 +87,28 @@ async def send_welcome(message: types.Message):
     user_id = message.from_user.id
     await update_activity(user_id)
     
-    # 1. Soo dir Sticker (Haddii aad hayso ID sax ah ku beddel kan, haddii kale default emoji ayuu iska dirayaa)
     try:
-        await message.answer_sticker("CAACAgIAAxkBAAE... (Ku beddel Sticker ID-gaaga)")
+        # Geli ID-ga Sticker-kaaga dhabta ah halkan hoose marka aad hesho
+        await message.answer_sticker("CAACAgIAAxkBAAE... (Geli ID-ga Sticker-kaaga)")
     except:
-        pass # Wuu iska indha tirayaa haddii ID-gu yara qaldan yahay
+        pass 
     
-    # 2. Badhanka Channel-ka ee la socda fariinta
     current_channel = await get_setting("force_channel")
-    channel_url = f"https://t.me/{current_channel.replace('@', '')}"
+    raw_welcome = await get_setting("welcome_text")
     
-    inline_kb = InlineKeyboardBuilder()
-    inline_kb.button(text="📢 Join Channel", url=channel_url)
+    # Beddelka magaca iyo channel-ka si otomaatig ah
+    welcome_text = raw_welcome.replace("{name}", message.from_user.first_name).replace("{channel}", current_channel)
     
-    # 3. Qoraalka soo dhaweynta oo gaaban
-    welcome_text = (
-        f"👋 Soo dhawoow <b>{message.from_user.first_name}</b>!\n\n"
-        "Kani waa bot-kaaga rasmiga ah ee aad kala soo degi karto muuqaalada TikTok adigoon wax watermark ah lahayn. Soo dir link-ga si aan kuugu soo dejiyo!"
-    )
+    prompt_text = "👇 Please send your TikTok video link below to begin!"
     
-    # 4. Hubi haddii qofku yahay Admin si loo siiyo badhanka (Feature-ka) Admin Panel
     if await is_admin(user_id):
         admin_kb = ReplyKeyboardBuilder()
         admin_kb.button(text="🛠 Admin Panel")
-        
-        await message.answer(text=welcome_text, reply_markup=inline_kb.as_markup())
-        await message.answer("Awoodaha Admin-ka waxaad ka heli kartaa badhanka hoose 👇", reply_markup=admin_kb.as_markup(resize_keyboard=True))
+        await message.answer(text=welcome_text)
+        await message.answer(prompt_text, reply_markup=admin_kb.as_markup(resize_keyboard=True))
     else:
-        await message.answer(text=welcome_text, reply_markup=inline_kb.as_markup())
+        await message.answer(text=welcome_text)
+        await message.answer(prompt_text)
 
 @dp.message(F.text.contains("http"))
 async def process_video(message: types.Message):
@@ -133,7 +137,8 @@ async def process_video(message: types.Message):
         )
         return await message.answer(limit_txt, reply_markup=builder.as_markup())
 
-    # Chat Action: Wuxuu u ekaanayaa mid video soo diraya (Typing-ka baddalkiisa)
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.TYPING)
+    await asyncio.sleep(1) # Waqti yar oo uu iska dhigayo inuu type garaynayo
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.UPLOAD_VIDEO)
 
     api_url = f"https://www.tikwm.com/api/?url={message.text}&hd=1"
@@ -149,7 +154,6 @@ async def process_video(message: types.Message):
             likes = data["data"].get("digg_count", 0)
             views = data["data"].get("play_count", 0)
 
-            # Badhamada Likes iyo Views dib baa loo soo celiyay
             builder = InlineKeyboardBuilder()
             builder.button(text=f"❤️ {likes:,}", callback_data="noop")
             builder.button(text=f"👁 {views:,}", callback_data="noop")
@@ -169,13 +173,12 @@ async def process_video(message: types.Message):
     except Exception as e:
         await message.answer("❌ Culeys ayaa ka jira server-ka soo-dejinta, fadlan isku day goor dhow.")
 
-# Si uusan error u dhicin marka qofku taabto badhanka Likes/Views
 @dp.callback_query(F.data == "noop")
 async def noop_callback(callback: types.CallbackQuery):
     await callback.answer()
 
 # ==========================================
-# 3. ADMIN PANEL (Feature Button)
+# 3. ADMIN PANEL
 # ==========================================
 @dp.message(F.text == "🛠 Admin Panel")
 async def admin_dashboard_btn(message: types.Message):
@@ -210,12 +213,13 @@ async def admin_dashboard_btn(message: types.Message):
     builder.button(text="👥 User Management", callback_data="admin_user_mgmt")
     builder.button(text="✉️ Broadcast", callback_data="admin_broadcast")
     builder.button(text="⚙️ Set Limit", callback_data="admin_set_limit")
+    builder.button(text="📝 Edit Welcome", callback_data="admin_edit_welcome")
     builder.button(text="➕ Add Admin", callback_data="admin_add_admin")
-    builder.adjust(2, 2, 1)
+    builder.adjust(2, 2, 2)
 
     await message.answer(text, reply_markup=builder.as_markup())
 
-# --- Callbacks-ka Admin Panel-ka ---
+# --- Callbacks ---
 @dp.callback_query(F.data == "admin_add_channel")
 async def ask_channel(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("Fadlan soo dir channel-ka aad ku xirayso bot-ka (tusaale: @cadnaanchannel):")
@@ -253,6 +257,18 @@ async def ask_broadcast(callback: types.CallbackQuery, state: FSMContext):
 async def ask_limit(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("Fadlan soo dir tirada limit-ka cusub ee aad rabto (tusaale: 3 ama 100):")
     await state.set_state(AdminStates.waiting_for_limit)
+    await callback.answer()
+
+@dp.callback_query(F.data == "admin_edit_welcome")
+async def ask_welcome_text(callback: types.CallbackQuery, state: FSMContext):
+    info_text = (
+        "Fadlan soo dir qoraalka cusub ee soo dhaweynta (/start).\n\n"
+        "💡 <b>Talo:</b> Waxaad qoraalkaaga ku dhex dari kartaa:\n"
+        "<code>{name}</code> - Si uu ugu beddelo magaca qofka.\n"
+        "<code>{channel}</code> - Si uu ugu beddelo channel-ka bot-ka ku xiran."
+    )
+    await callback.message.answer(info_text)
+    await state.set_state(AdminStates.waiting_for_welcome_text)
     await callback.answer()
 
 @dp.callback_query(F.data == "admin_add_admin")
@@ -302,7 +318,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
             users = await cursor.fetchall()
             for user in users:
                 try:
-                    await bot.send_message(user[0], message.text)
+                    await bot.send_message(user[0], message.html_text)
                     success += 1
                     await asyncio.sleep(0.05)
                 except:
@@ -321,6 +337,15 @@ async def process_limit(message: types.Message, state: FSMContext):
         await message.answer("❌ Fadlan nambar keliya soo dir.")
     await state.clear()
 
+@dp.message(AdminStates.waiting_for_welcome_text)
+async def process_welcome_text(message: types.Message, state: FSMContext):
+    # message.html_text waxay ilaalisaa tags-ka (bold, italic) ee aad soo qorto
+    async with aiosqlite.connect('bot_database.db') as db:
+        await db.execute('UPDATE settings SET value = ? WHERE key = "welcome_text"', (message.html_text,))
+        await db.commit()
+    await message.answer("✅ Qoraalka soo dhaweynta si guul ah ayaa loo beddelay!")
+    await state.clear()
+
 @dp.message(AdminStates.waiting_for_new_admin)
 async def process_new_admin(message: types.Message, state: FSMContext):
     if message.text.isdigit():
@@ -336,7 +361,7 @@ async def process_new_admin(message: types.Message, state: FSMContext):
 # 4. WEB SERVER (Render Fix)
 # ==========================================
 async def health_check(request):
-    return web.Response(text="Bot is running!")
+    return web.Response(text="VidClean HD Bot is running perfectly!")
 
 async def main():
     await init_db()
@@ -355,4 +380,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-    

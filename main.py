@@ -5,15 +5,16 @@ import aiosqlite
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode
+from aiogram.client.default import DefaultBotProperties
 from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-# Admin ID-gaaga waxaad ka dhex gelin doontaa Render Environment Variables
 ADMIN_ID = int(os.getenv("ADMIN_ID", 0)) 
 
-bot = Bot(token=BOT_TOKEN, parse_mode=ParseMode.HTML)
+# Halkan ayaan ku saxnay isbeddelka cusub ee aiogram 3.7.0+
+bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
 dp = Dispatcher()
 
 # --- 1. NIDAAMKA DATABASE-KA (SQLite) ---
@@ -91,7 +92,7 @@ async def process_video_link(message: types.Message):
 
     processing_msg = await message.answer("🔎 <i>Processing your video, please wait...</i>")
     
-    # API Placeholder (Halkan ayaa mashiinka dhabta ah la gelin doonaa)
+    # API Placeholder
     await asyncio.sleep(2) 
     
     # Kordhi tirada downloads-ka marka uu guulaysto
@@ -105,13 +106,11 @@ async def health_check(request):
 async def main():
     await init_db()
     
-    # Kici Website-ka qarsoon ee Render lagu khiyaamaynayo
     app = web.Application()
     app.router.add_get('/', health_check)
     runner = web.AppRunner(app)
     await runner.setup()
     
-    # Render wuxuu si otomaatig ah u bixiyaa PORT, haddii kalena 10000 ayaan isticmaalaynaa
     port = int(os.environ.get('PORT', 10000))
     site = web.TCPSite(runner, '0.0.0.0', port)
     await site.start()
@@ -121,3 +120,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+                                 

@@ -5,10 +5,10 @@ import time
 import aiosqlite
 import aiohttp
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import CommandStart, Command
-from aiogram.enums import ParseMode
+from aiogram.filters import CommandStart
+from aiogram.enums import ParseMode, ChatAction
 from aiogram.client.default import DefaultBotProperties
-from aiogram.utils.keyboard import InlineKeyboardBuilder
+from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiohttp import web
@@ -70,10 +70,115 @@ async def get_setting(key):
             return row[0] if row else None
 
 # ==========================================
-# 2. ADMIN PANEL (Interactive UI)
+# 2. USER INTERFACE & DOWNLOADER
 # ==========================================
-@dp.message(Command("admin"))
-async def admin_dashboard(message: types.Message):
+@dp.message(CommandStart())
+async def send_welcome(message: types.Message):
+    user_id = message.from_user.id
+    await update_activity(user_id)
+    
+    # 1. Soo dir Sticker (Haddii aad hayso ID sax ah ku beddel kan, haddii kale default emoji ayuu iska dirayaa)
+    try:
+        await message.answer_sticker("CAACAgIAAxkBAAE... (Ku beddel Sticker ID-gaaga)")
+    except:
+        pass # Wuu iska indha tirayaa haddii ID-gu yara qaldan yahay
+    
+    # 2. Badhanka Channel-ka ee la socda fariinta
+    current_channel = await get_setting("force_channel")
+    channel_url = f"https://t.me/{current_channel.replace('@', '')}"
+    
+    inline_kb = InlineKeyboardBuilder()
+    inline_kb.button(text="📢 Join Channel", url=channel_url)
+    
+    # 3. Qoraalka soo dhaweynta oo gaaban
+    welcome_text = (
+        f"👋 Soo dhawoow <b>{message.from_user.first_name}</b>!\n\n"
+        "Kani waa bot-kaaga rasmiga ah ee aad kala soo degi karto muuqaalada TikTok adigoon wax watermark ah lahayn. Soo dir link-ga si aan kuugu soo dejiyo!"
+    )
+    
+    # 4. Hubi haddii qofku yahay Admin si loo siiyo badhanka (Feature-ka) Admin Panel
+    if await is_admin(user_id):
+        admin_kb = ReplyKeyboardBuilder()
+        admin_kb.button(text="🛠 Admin Panel")
+        
+        await message.answer(text=welcome_text, reply_markup=inline_kb.as_markup())
+        await message.answer("Awoodaha Admin-ka waxaad ka heli kartaa badhanka hoose 👇", reply_markup=admin_kb.as_markup(resize_keyboard=True))
+    else:
+        await message.answer(text=welcome_text, reply_markup=inline_kb.as_markup())
+
+@dp.message(F.text.contains("http"))
+async def process_video(message: types.Message):
+    user_id = message.from_user.id
+    await update_activity(user_id)
+    
+    async with aiosqlite.connect('bot_database.db') as db:
+        async with db.execute('SELECT is_blocked, downloads FROM users WHERE user_id = ?', (user_id,)) as cursor:
+            user_data = await cursor.fetchone()
+            
+    if user_data and user_data[0] == 1: 
+        return
+        
+    downloads = user_data[1] if user_data else 0
+    limit = int(await get_setting("download_limit"))
+    current_channel = await get_setting("force_channel")
+    
+    if downloads >= limit:
+        builder = InlineKeyboardBuilder()
+        clean_url = current_channel.replace('@', '')
+        builder.button(text="✅ Subscribe", url=f"https://t.me/{clean_url}")
+        limit_txt = (
+            "⚠️ <b>Limit-kii waad gaartay!</b>\n\n"
+            f"Fadlan ku biir channel-keena hoose si aad u sii isticmaasho bot-ka.\n\n"
+            f"📢 {current_channel}"
+        )
+        return await message.answer(limit_txt, reply_markup=builder.as_markup())
+
+    # Chat Action: Wuxuu u ekaanayaa mid video soo diraya (Typing-ka baddalkiisa)
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.UPLOAD_VIDEO)
+
+    api_url = f"https://www.tikwm.com/api/?url={message.text}&hd=1"
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url) as response:
+                data = await response.json()
+
+        if data.get("code") == 0: 
+            video_url = data["data"]["play"]
+            music_url = data["data"].get("music", "")
+            likes = data["data"].get("digg_count", 0)
+            views = data["data"].get("play_count", 0)
+
+            # Badhamada Likes iyo Views dib baa loo soo celiyay
+            builder = InlineKeyboardBuilder()
+            builder.button(text=f"❤️ {likes:,}", callback_data="noop")
+            builder.button(text=f"👁 {views:,}", callback_data="noop")
+            if music_url:
+                builder.button(text="🎵 Get Sound", url=music_url)
+            builder.adjust(2, 1)
+            
+            await bot.send_video(chat_id=message.chat.id, video=video_url, reply_markup=builder.as_markup())
+            
+            async with aiosqlite.connect('bot_database.db') as db:
+                await db.execute('UPDATE users SET downloads = downloads + 1 WHERE user_id = ?', (user_id,))
+                await db.execute('UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = "total_links_downloaded"')
+                await db.commit()
+        else:
+            await message.answer("❌ Fadlan soo dir link sax ah oo TikTok ah.")
+            
+    except Exception as e:
+        await message.answer("❌ Culeys ayaa ka jira server-ka soo-dejinta, fadlan isku day goor dhow.")
+
+# Si uusan error u dhicin marka qofku taabto badhanka Likes/Views
+@dp.callback_query(F.data == "noop")
+async def noop_callback(callback: types.CallbackQuery):
+    await callback.answer()
+
+# ==========================================
+# 3. ADMIN PANEL (Feature Button)
+# ==========================================
+@dp.message(F.text == "🛠 Admin Panel")
+async def admin_dashboard_btn(message: types.Message):
     if not await is_admin(message.from_user.id):
         return
 
@@ -82,8 +187,6 @@ async def admin_dashboard(message: types.Message):
             total_users = (await cursor.fetchone())[0]
         async with db.execute('SELECT COUNT(*) FROM users WHERE is_blocked = 1') as cursor:
             total_blocked = (await cursor.fetchone())[0]
-        
-        # Dadka online ahaa 24-kii saac ee lasoo dhaafay
         yesterday = int(time.time()) - 86400
         async with db.execute('SELECT COUNT(*) FROM users WHERE last_active > ?', (yesterday,)) as cursor:
             online_users = (await cursor.fetchone())[0]
@@ -112,7 +215,7 @@ async def admin_dashboard(message: types.Message):
 
     await message.answer(text, reply_markup=builder.as_markup())
 
-# --- Callback Handlers for Admin Panel ---
+# --- Callbacks-ka Admin Panel-ka ---
 @dp.callback_query(F.data == "admin_add_channel")
 async def ask_channel(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer("Fadlan soo dir channel-ka aad ku xirayso bot-ka (tusaale: @cadnaanchannel):")
@@ -158,7 +261,7 @@ async def ask_admin(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_new_admin)
     await callback.answer()
 
-# --- Message Handlers for Admin States ---
+# --- Qabashada Jawaabaha Admin-ka ---
 @dp.message(AdminStates.waiting_for_channel)
 async def set_new_channel(message: types.Message, state: FSMContext):
     new_channel = message.text.strip()
@@ -170,31 +273,28 @@ async def set_new_channel(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_block)
 async def process_block(message: types.Message, state: FSMContext):
-    try:
-        user_id = int(message.text)
+    if message.text.isdigit():
         async with aiosqlite.connect('bot_database.db') as db:
-            await db.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (user_id,))
+            await db.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (int(message.text),))
             await db.commit()
-        await message.answer(f"✅ User {user_id} si guul ah ayaa loo block-gareeyay.")
-    except ValueError:
+        await message.answer(f"✅ User {message.text} si guul ah ayaa loo block-gareeyay.")
+    else:
         await message.answer("❌ ID-gu waa inuu noqdaa nambar.")
     await state.clear()
 
 @dp.message(AdminStates.waiting_for_unblock)
 async def process_unblock(message: types.Message, state: FSMContext):
-    try:
-        user_id = int(message.text)
+    if message.text.isdigit():
         async with aiosqlite.connect('bot_database.db') as db:
-            await db.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (user_id,))
+            await db.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (int(message.text),))
             await db.commit()
-        await message.answer(f"✅ User {user_id} waa laga furay block-ga.")
-    except ValueError:
+        await message.answer(f"✅ User {message.text} waa laga furay block-ga.")
+    else:
         await message.answer("❌ ID-gu waa inuu noqdaa nambar.")
     await state.clear()
 
 @dp.message(AdminStates.waiting_for_broadcast)
 async def process_broadcast(message: types.Message, state: FSMContext):
-    msg_text = message.text
     success = 0
     await message.answer("⏳ Fariinta ayaa la dirayaa...")
     async with aiosqlite.connect('bot_database.db') as db:
@@ -202,7 +302,7 @@ async def process_broadcast(message: types.Message, state: FSMContext):
             users = await cursor.fetchall()
             for user in users:
                 try:
-                    await bot.send_message(user[0], msg_text)
+                    await bot.send_message(user[0], message.text)
                     success += 1
                     await asyncio.sleep(0.05)
                 except:
@@ -223,87 +323,14 @@ async def process_limit(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_new_admin)
 async def process_new_admin(message: types.Message, state: FSMContext):
-    try:
-        new_admin_id = int(message.text)
+    if message.text.isdigit():
         async with aiosqlite.connect('bot_database.db') as db:
-            await db.execute('INSERT OR IGNORE INTO admins (admin_id) VALUES (?)', (new_admin_id,))
+            await db.execute('INSERT OR IGNORE INTO admins (admin_id) VALUES (?)', (int(message.text),))
             await db.commit()
-        await message.answer(f"✅ Admin cusub ayaa lagu daray: {new_admin_id}")
-    except ValueError:
+        await message.answer(f"✅ Admin cusub ayaa lagu daray: {message.text}")
+    else:
         await message.answer("❌ ID-gu waa inuu noqdaa nambar.")
     await state.clear()
-
-# ==========================================
-# 3. USER INTERFACE & DOWNLOADER
-# ==========================================
-@dp.message(CommandStart())
-async def send_welcome(message: types.Message):
-    await update_activity(message.from_user.id)
-    
-    welcome_text = (
-        f"👋 <b>Welcome to VidClean HD!</b>\n\n"
-        "Your ultimate, lightning-fast video downloader. Send me any TikTok link, and I will download it for you in HD quality, completely without a watermark.\n\n"
-        "👇 <i>Send your link below to begin!</i>"
-    )
-    await message.answer(text=welcome_text)
-
-@dp.message(F.text.contains("http"))
-async def process_video(message: types.Message):
-    user_id = message.from_user.id
-    await update_activity(user_id)
-    
-    # Hubinta Block-ga
-    async with aiosqlite.connect('bot_database.db') as db:
-        async with db.execute('SELECT is_blocked, downloads FROM users WHERE user_id = ?', (user_id,)) as cursor:
-            user_data = await cursor.fetchone()
-            
-    if user_data and user_data[0] == 1: 
-        return
-        
-    downloads = user_data[1] if user_data else 0
-    limit = int(await get_setting("download_limit"))
-    current_channel = await get_setting("force_channel")
-    
-    # Sharciga Limits-ka
-    if downloads >= limit:
-        builder = InlineKeyboardBuilder()
-        clean_url = current_channel.replace('@', '')
-        builder.button(text="✅ Subscribe", url=f"https://t.me/{clean_url}")
-        
-        limit_txt = (
-            "⚠️ <b>Limit-kii waad gaartay!</b>\n\n"
-            f"Fadlan ku biir channel-keena hoose si aad u sii isticmaasho bot-ka.\n\n"
-            f"📢 {current_channel}"
-        )
-        return await message.answer(limit_txt, reply_markup=builder.as_markup())
-
-    status_msg = await message.answer("🔄 <i>>> sending a video...</i>")
-
-    # API Wacida
-    api_url = f"https://www.tikwm.com/api/?url={message.text}&hd=1"
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as response:
-                data = await response.json()
-
-        if data.get("code") == 0: 
-            video_url = data["data"]["play"]
-            
-            # Dirida Muuqaalka
-            await bot.send_video(chat_id=message.chat.id, video=video_url)
-            await status_msg.delete()
-            
-            # Kordhinta Downloads
-            async with aiosqlite.connect('bot_database.db') as db:
-                await db.execute('UPDATE users SET downloads = downloads + 1 WHERE user_id = ?', (user_id,))
-                await db.execute('UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = "total_links_downloaded"')
-                await db.commit()
-        else:
-            await status_msg.edit_text("❌ Fadlan soo dir link sax ah.")
-            
-    except Exception as e:
-        await status_msg.edit_text("❌ Culeys ayaa ka jira server-ka soo-dejinta, fadlan isku day goor dhow.")
 
 # ==========================================
 # 4. WEB SERVER (Render Fix)

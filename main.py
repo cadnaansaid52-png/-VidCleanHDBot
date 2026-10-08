@@ -424,4 +424,4 @@ async def process_video(message: types.Message, state: FSMContext):
     
     # Admins bypass the limit and channel check
     if not await is_admin(user_id):
-        if limit > 0 and do
+        if limit > 0 and downloads >= limit:

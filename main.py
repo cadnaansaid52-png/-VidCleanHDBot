@@ -18,6 +18,9 @@ from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
+# ==========================================
+# 1. BOT SETUP & ADMIN IDENTIFICATION
+# ==========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 try:
     MASTER_ADMIN = int(os.getenv("ADMIN_ID", 0))
@@ -38,7 +41,7 @@ class AdminStates(StatesGroup):
     waiting_for_user_info = State()
 
 # ==========================================
-# 1. DATABASE
+# 2. DATABASE SYSTEM (SQLite)
 # ==========================================
 async def init_db():
     async with aiosqlite.connect('bot_database.db') as db:
@@ -90,7 +93,7 @@ async def is_admin(user_id):
             return await cursor.fetchone() is not None
 
 # ==========================================
-# 2. ADMIN PANEL
+# 3. ADMIN PANEL DASHBOARD
 # ==========================================
 async def get_dashboard_text():
     async with aiosqlite.connect('bot_database.db') as db:
@@ -142,6 +145,7 @@ async def admin_dashboard_cmd(message: types.Message, state: FSMContext):
     text = await get_dashboard_text()
     await message.answer(text, reply_markup=get_dashboard_keyboard())
 
+# --- Admin Panel Features (Callbacks) ---
 @dp.callback_query(F.data == "adm_refresh")
 async def refresh_dash(callback: types.CallbackQuery):
     if not await is_admin(callback.from_user.id): return
@@ -247,7 +251,7 @@ async def toggle_maintenance(callback: types.CallbackQuery):
     except:
         pass
 
-# --- Admin State Handlers ---
+# --- Qabashada Jawaabaha Admin-ka (FSM Handlers) ---
 @dp.message(AdminStates.waiting_for_user_info)
 async def process_user_info(message: types.Message, state: FSMContext):
     if not message.text.isdigit():
@@ -365,7 +369,7 @@ async def process_new_admin(message: types.Message, state: FSMContext):
     await state.clear()
 
 # ==========================================
-# 3. USER INTERFACE & DOWNLOADER
+# 4. BOT DOWNLOADER & LIMITS LOGIC
 # ==========================================
 async def check_subscription(user_id, channel_username):
     if not channel_username or channel_username == "None":
@@ -375,7 +379,7 @@ async def check_subscription(user_id, channel_username):
     try:
         member = await bot.get_chat_member(chat_id=clean_username, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception as e:
+    except Exception:
         return True 
 
 @dp.message(CommandStart())
@@ -385,7 +389,7 @@ async def send_welcome(message: types.Message, state: FSMContext):
     await update_activity(user_id)
     
     try:
-        await message.answer_sticker("CAACAgIAAxkBAAE... (Geli Sticker ID)")
+        await message.answer_sticker("CAACAgIAAxkBAAE... (Insert Sticker ID)")
     except:
         pass 
     
@@ -422,8 +426,4 @@ async def process_video(message: types.Message, state: FSMContext):
     current_channel = await get_setting("force_channel")
     
     if not await is_admin(user_id):
-        if limit > 0 and downloads >= limit:
-            is_subbed = await check_subscription(user_id, current_channel)
-            if not is_subbed:
-                builder = InlineKeyboardBuilder()
-                clean_url = curre
+        if lim

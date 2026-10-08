@@ -17,9 +17,6 @@ from aiohttp import web
 
 logging.basicConfig(level=logging.INFO)
 
-# ==========================================
-# 1. BOT SETUP & ADMIN IDENTIFICATION
-# ==========================================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 try:
     MASTER_ADMIN = int(os.getenv("ADMIN_ID", 0))
@@ -38,9 +35,6 @@ class AdminStates(StatesGroup):
     waiting_for_start_msg = State()
     waiting_for_new_admin = State()
 
-# ==========================================
-# 2. DATABASE SYSTEM (SQLite)
-# ==========================================
 async def init_db():
     async with aiosqlite.connect('bot_database.db') as db:
         await db.execute('''CREATE TABLE IF NOT EXISTS users 
@@ -90,9 +84,6 @@ async def is_admin(user_id):
         async with db.execute('SELECT admin_id FROM admins WHERE admin_id = ?', (user_id,)) as cursor:
             return await cursor.fetchone() is not None
 
-# ==========================================
-# 3. ADMIN PANEL DASHBOARD (100% ENGLISH)
-# ==========================================
 async def get_dashboard_text():
     async with aiosqlite.connect('bot_database.db') as db:
         async with db.execute('SELECT COUNT(*) FROM users') as cursor:
@@ -134,15 +125,13 @@ def get_dashboard_keyboard():
     builder.adjust(1, 2, 2, 2, 2)
     return builder.as_markup()
 
-# Xalkii bug-ga /admin: Hadda state=clear ayaa la raaciyay si uusan u xannibmin marnaba
 @dp.message(Command("admin"))
 async def admin_dashboard_cmd(message: types.Message, state: FSMContext):
     if not await is_admin(message.from_user.id): return
-    await state.clear() # <- Tani waxay xallisay in 2 jeer la qoro /admin
+    await state.clear()
     text = await get_dashboard_text()
     await message.answer(text, reply_markup=get_dashboard_keyboard())
 
-# --- Admin Panel Features (Callbacks) ---
 @dp.callback_query(F.data == "adm_refresh")
 async def refresh_dash(callback: types.CallbackQuery):
     if not await is_admin(callback.from_user.id): return
@@ -241,7 +230,6 @@ async def toggle_maintenance(callback: types.CallbackQuery):
     except:
         pass
 
-# --- Qabashada Jawaabaha Admin-ka (FSM Handlers) ---
 @dp.message(AdminStates.waiting_for_channel)
 async def process_channel(message: types.Message, state: FSMContext):
     if message.text.startswith('/'): return await message.answer("❌ Invalid input. Please send text, not a command.")
@@ -300,7 +288,6 @@ async def process_limit(message: types.Message, state: FSMContext):
 
 @dp.message(AdminStates.waiting_for_start_msg)
 async def process_welcome_text(message: types.Message, state: FSMContext):
-    # Xalkii bug-ga /start is-kaydinaysay
     if not message.text or message.text.startswith('/'):
         return await message.answer("❌ Invalid input. Please send proper text, not a command.")
     await set_setting("welcome_text", message.html_text)
@@ -318,9 +305,6 @@ async def process_new_admin(message: types.Message, state: FSMContext):
         await message.answer("❌ Invalid input. Please send a valid numeric ID.")
     await state.clear()
 
-# ==========================================
-# 4. BOT DOWNLOADER & LIMITS LOGIC
-# ==========================================
 async def check_subscription(user_id, channel_username):
     if not channel_username or channel_username == "None":
         return True
@@ -328,7 +312,6 @@ async def check_subscription(user_id, channel_username):
         member = await bot.get_chat_member(chat_id=channel_username, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
     except Exception:
-        # Haddii bot-ku uusan admin ahayn channel-ka, qofka wuu fasaxayaa si uusan bot-ku u xannibmin.
         return True 
 
 @dp.message(CommandStart())
@@ -337,13 +320,11 @@ async def send_welcome(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     await update_activity(user_id)
     
-    # 1. Sticker (Beddel ID-ga haddii aad rabto mid gaar ah)
     try:
-        await message.answer_sticker("CAACAgIAAxkBAAE... (Geli ID-ga Sticker-kaaga)")
+        await message.answer_sticker("CAACAgIAAxkBAAE...")
     except:
         pass 
     
-    # 2. Qoraalka
     current_channel = await get_setting("force_channel")
     raw_welcome = await get_setting("welcome_text")
     welcome_text = raw_welcome.replace("{name}", message.from_user.first_name).replace("{channel}", current_channel)
@@ -355,7 +336,6 @@ async def process_video(message: types.Message, state: FSMContext):
     if current_state is not None:
         return 
 
-    # Hubi inuu link yahay
     url_match = re.search(r'(https?://[^\s]+)', message.text)
     if not url_match or "tiktok" not in url_match.group(1).lower():
         return 
@@ -364,11 +344,9 @@ async def process_video(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     await update_activity(user_id)
     
-    # Hubi Maintenance
     if await get_setting("maintenance") == "1" and not await is_admin(user_id):
         return await message.answer("⚙️ <b>Bot is currently under maintenance!</b>\nWe are upgrading our servers. Please try again later.")
 
-    # Hubi Block & Downloads
     async with aiosqlite.connect('bot_database.db') as db:
         async with db.execute('SELECT is_blocked, downloads FROM users WHERE user_id = ?', (user_id,)) as cursor:
             user_data = await cursor.fetchone()
@@ -380,7 +358,6 @@ async def process_video(message: types.Message, state: FSMContext):
     limit = int(await get_setting("download_limit"))
     current_channel = await get_setting("force_channel")
     
-    # Sharciga Limit-ka 100% saxan
     if limit > 0 and downloads >= limit:
         is_subbed = await check_subscription(user_id, current_channel)
         if not is_subbed:
@@ -394,7 +371,6 @@ async def process_video(message: types.Message, state: FSMContext):
             )
             return await message.answer(limit_txt, reply_markup=builder.as_markup())
 
-    # Chat Action oo kaliya, fariin ma jirto
     await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.UPLOAD_VIDEO)
 
     api_url = f"https://www.tikwm.com/api/?url={extracted_url}&hd=1"
@@ -429,4 +405,28 @@ async def process_video(message: types.Message, state: FSMContext):
     except Exception:
         await message.answer("❌ Connection error. Please try again later.")
 
-@dp.c
+@dp.callback_query(F.data == "noop")
+async def noop_callback(callback: types.CallbackQuery):
+    await callback.answer()
+
+async def health_check(request):
+    return web.Response(text="VidClean HD is running perfectly!")
+
+async def main():
+    await init_db()
+    
+    app = web.Application()
+    app.router.add_get('/', health_check)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    port = int(os.environ.get('PORT', 10000))
+    site = web.TCPSite(runner, '0.0.0.0', port)
+    await site.start()
+    
+    print("Bot is ready and running flawlessly!")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+    

@@ -423,5 +423,20 @@ async def process_video(message: types.Message, state: FSMContext):
     current_channel = await get_setting("force_channel")
     
     # Admins bypass the limit and channel check
-    if not await is_admin(user_id):
+          if not await is_admin(user_id):
         if limit > 0 and downloads >= limit:
+            is_subbed = await check_subscription(user_id, current_channel)
+            if not is_subbed:
+                builder = InlineKeyboardBuilder()
+                clean_url = current_channel.replace('@', '')
+                builder.button(text="✅ Subscribe", url=f"https://t.me/{clean_url}")
+                limit_txt = (
+                    "⚠️ <b>Download Limit Reached!</b>\n\n"
+                    f"Please subscribe to our channel below to unlock unlimited downloads.\n\n"
+                    f"📢 {current_channel}"
+                )
+                return await message.answer(limit_txt, reply_markup=builder.as_markup())
+
+    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.UPLOAD_VIDEO)
+    api_url = f"https://www.tikwm.com/api/?url={extracted_url}&hd=1"
+

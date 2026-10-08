@@ -35,7 +35,7 @@ class AdminStates(StatesGroup):
     waiting_for_limit = State()
     waiting_for_start_msg = State()
     waiting_for_new_admin = State()
-    waiting_for_user_info = State() # Feature-ka cusub
+    waiting_for_user_info = State()
 
 # ==========================================
 # 1. DATABASE
@@ -281,7 +281,7 @@ async def process_channel(message: types.Message, state: FSMContext):
         await message.answer("✅ Force channel has been <b>DISABLED</b>.")
     else:
         if not text.startswith('@') and not text.startswith('http'):
-            text = f"@{text}" # Si toos ah @ ugu dar haddii uu iloobo
+            text = f"@{text}" 
         await set_setting("force_channel", text)
         await message.answer(f"✅ Force channel successfully updated to: {text}")
     await state.clear()
@@ -345,7 +345,6 @@ async def process_welcome_text(message: types.Message, state: FSMContext):
         return await message.answer("❌ Invalid input. Please send proper text, not a command.")
     await set_setting("welcome_text", message.html_text)
     
-    # Horudhac (Preview) tus admin-ka
     current_channel = await get_setting("force_channel")
     channel_display = "" if current_channel == "None" else current_channel
     preview = message.html_text.replace("{name}", message.from_user.first_name).replace("{channel}", channel_display)
@@ -377,7 +376,7 @@ async def check_subscription(user_id, channel_username):
         member = await bot.get_chat_member(chat_id=clean_username, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
     except Exception as e:
-        return True # Hadii botku uusan admin ahayn channelka, wuu fasaxayaa qofka
+        return True 
 
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message, state: FSMContext):
@@ -422,21 +421,9 @@ async def process_video(message: types.Message, state: FSMContext):
     limit = int(await get_setting("download_limit"))
     current_channel = await get_setting("force_channel")
     
-    # Admins bypass the limit and channel check
-          if not await is_admin(user_id):
+    if not await is_admin(user_id):
         if limit > 0 and downloads >= limit:
             is_subbed = await check_subscription(user_id, current_channel)
             if not is_subbed:
                 builder = InlineKeyboardBuilder()
-                clean_url = current_channel.replace('@', '')
-                builder.button(text="✅ Subscribe", url=f"https://t.me/{clean_url}")
-                limit_txt = (
-                    "⚠️ <b>Download Limit Reached!</b>\n\n"
-                    f"Please subscribe to our channel below to unlock unlimited downloads.\n\n"
-                    f"📢 {current_channel}"
-                )
-                return await message.answer(limit_txt, reply_markup=builder.as_markup())
-
-    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.UPLOAD_VIDEO)
-    api_url = f"https://www.tikwm.com/api/?url={extracted_url}&hd=1"
-
+                clean_url = curre

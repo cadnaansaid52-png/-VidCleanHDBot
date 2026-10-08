@@ -5,6 +5,7 @@ import time
 import re
 import aiosqlite
 import aiohttp
+from datetime import datetime
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import CommandStart, Command
 from aiogram.enums import ParseMode, ChatAction
@@ -34,7 +35,11 @@ class AdminStates(StatesGroup):
     waiting_for_limit = State()
     waiting_for_start_msg = State()
     waiting_for_new_admin = State()
+    waiting_for_user_info = State() # Feature-ka cusub
 
+# ==========================================
+# 1. DATABASE
+# ==========================================
 async def init_db():
     async with aiosqlite.connect('bot_database.db') as db:
         await db.execute('''CREATE TABLE IF NOT EXISTS users 
@@ -53,7 +58,7 @@ async def init_db():
             "👇 <i>Please send your TikTok video link below to begin!</i>"
         )
         
-        await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("force_channel", "@cadnaanchannel")')
+        await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("force_channel", "None")')
         await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("download_limit", "3")')
         await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("total_links", "0")')
         await db.execute('INSERT OR IGNORE INTO settings (key, value) VALUES ("welcome_text", ?)', (default_welcome,))
@@ -84,6 +89,9 @@ async def is_admin(user_id):
         async with db.execute('SELECT admin_id FROM admins WHERE admin_id = ?', (user_id,)) as cursor:
             return await cursor.fetchone() is not None
 
+# ==========================================
+# 2. ADMIN PANEL
+# ==========================================
 async def get_dashboard_text():
     async with aiosqlite.connect('bot_database.db') as db:
         async with db.execute('SELECT COUNT(*) FROM users') as cursor:
@@ -98,15 +106,16 @@ async def get_dashboard_text():
     dl_limit = await get_setting("download_limit")
     current_channel = await get_setting("force_channel")
     maint_status = "ON 🔴" if await get_setting("maintenance") == "1" else "OFF 🟢"
+    channel_display = "Disabled ❌" if current_channel == "None" else current_channel
 
     text = (
-        "🤖 <b>Admin Dashboard</b>\n\n"
+        "🤖 <b>Master Admin Dashboard</b>\n\n"
         f"👥 <b>Total Users:</b> {total_users}\n"
         f"🔗 <b>Total Links Processed:</b> {total_links}\n"
         f"🟢 <b>Online Users (24h):</b> {online_users}\n"
         f"🚫 <b>Blocked Users:</b> {total_blocked}\n\n"
-        f"📢 <b>Current Channel:</b> {current_channel}\n"
-        f"⚙️ <b>Download Limit:</b> {dl_limit} limit\n"
+        f"📢 <b>Current Channel:</b> {channel_display}\n"
+        f"⚙️ <b>Download Limit:</b> {dl_limit} downloads\n"
         f"🛠 <b>Maintenance Mode:</b> {maint_status}"
     )
     return text
@@ -114,15 +123,16 @@ async def get_dashboard_text():
 def get_dashboard_keyboard():
     builder = InlineKeyboardBuilder()
     builder.button(text="👥 User Management", callback_data="adm_users")
+    builder.button(text="🔍 User Info", callback_data="adm_userinfo")
     builder.button(text="📢 Set Channel", callback_data="adm_channel")
     builder.button(text="📝 Edit Welcome", callback_data="adm_startmsg")
     builder.button(text="⚙️ Set Limits", callback_data="adm_limits")
     builder.button(text="✉️ Broadcast", callback_data="adm_broadcast")
     builder.button(text="➕ Add Admin", callback_data="adm_addadmin")
-    builder.button(text="📁 Export Users", callback_data="adm_export")
+    builder.button(text="📁 Export Data", callback_data="adm_export")
     builder.button(text="🛑 Maintenance", callback_data="adm_maint")
     builder.button(text="🔄 Refresh", callback_data="adm_refresh")
-    builder.adjust(1, 2, 2, 2, 2)
+    builder.adjust(2, 2, 2, 2, 2)
     return builder.as_markup()
 
 @dp.message(Command("admin"))
@@ -140,12 +150,19 @@ async def refresh_dash(callback: types.CallbackQuery):
         await callback.message.edit_text(text, reply_markup=get_dashboard_keyboard())
     except:
         pass
-    await callback.answer("✅ Dashboard Refreshed")
+    await callback.answer("✅ Refreshed")
+
+@dp.callback_query(F.data == "adm_userinfo")
+async def ask_userinfo(callback: types.CallbackQuery, state: FSMContext):
+    if not await is_admin(callback.from_user.id): return
+    await callback.message.answer("🔍 Please send the User ID to check their stats:")
+    await state.set_state(AdminStates.waiting_for_user_info)
+    await callback.answer()
 
 @dp.callback_query(F.data == "adm_channel")
 async def ask_channel(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
-    await callback.message.answer("Please send the new channel username (e.g., @yourchannel):")
+    await callback.message.answer("📢 Send the new channel username (e.g., @yourchannel).\n\n<i>Reply with <b>None</b> to disable force subscription.</i>")
     await state.set_state(AdminStates.waiting_for_channel)
     await callback.answer()
 
@@ -161,27 +178,27 @@ async def user_mgmt_menu(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "adm_block")
 async def ask_block(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Please send the User ID you want to Block:")
+    await callback.message.answer("🚫 Send the User ID you want to Block:")
     await state.set_state(AdminStates.waiting_for_block)
     await callback.answer()
 
 @dp.callback_query(F.data == "adm_unblock")
 async def ask_unblock(callback: types.CallbackQuery, state: FSMContext):
-    await callback.message.answer("Please send the User ID you want to Unblock:")
+    await callback.message.answer("✅ Send the User ID you want to Unblock:")
     await state.set_state(AdminStates.waiting_for_unblock)
     await callback.answer()
 
 @dp.callback_query(F.data == "adm_broadcast")
 async def ask_broadcast(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
-    await callback.message.answer("Please send the message you want to broadcast (Text, Photo, or Video):")
+    await callback.message.answer("✉️ Send the message you want to broadcast (Text, Photo, or Video):")
     await state.set_state(AdminStates.waiting_for_broadcast)
     await callback.answer()
 
 @dp.callback_query(F.data == "adm_limits")
 async def ask_limit(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
-    await callback.message.answer("Please send the new download limit number (e.g., 3 or 100):")
+    await callback.message.answer("⚙️ Send the new download limit number (e.g., 3 or 100):")
     await state.set_state(AdminStates.waiting_for_limit)
     await callback.answer()
 
@@ -189,7 +206,7 @@ async def ask_limit(callback: types.CallbackQuery, state: FSMContext):
 async def ask_welcome_text(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
     info_text = (
-        "Please send the new welcome message text.\n\n"
+        "📝 Please send the new welcome message text.\n\n"
         "💡 <b>Variables you can use:</b>\n"
         "<code>{name}</code> - Replaces with user's name.\n"
         "<code>{channel}</code> - Replaces with forced channel."
@@ -201,7 +218,7 @@ async def ask_welcome_text(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "adm_addadmin")
 async def ask_admin(callback: types.CallbackQuery, state: FSMContext):
     if not await is_admin(callback.from_user.id): return
-    await callback.message.answer("Please send the Telegram User ID to promote to Admin:")
+    await callback.message.answer("➕ Send the Telegram User ID to promote to Admin:")
     await state.set_state(AdminStates.waiting_for_new_admin)
     await callback.answer()
 
@@ -230,20 +247,54 @@ async def toggle_maintenance(callback: types.CallbackQuery):
     except:
         pass
 
+# --- Admin State Handlers ---
+@dp.message(AdminStates.waiting_for_user_info)
+async def process_user_info(message: types.Message, state: FSMContext):
+    if not message.text.isdigit():
+        return await message.answer("❌ Invalid input. Please send a numeric ID.")
+    user_id = int(message.text)
+    async with aiosqlite.connect('bot_database.db') as db:
+        async with db.execute('SELECT downloads, is_blocked, last_active FROM users WHERE user_id = ?', (user_id,)) as cursor:
+            user_data = await cursor.fetchone()
+    if user_data:
+        is_blocked = "Yes 🔴" if user_data[1] == 1 else "No 🟢"
+        last_seen = datetime.fromtimestamp(user_data[2]).strftime('%Y-%m-%d %H:%M:%S') if user_data[2] > 0 else "Never"
+        info = (
+            f"🔍 <b>User Information</b>\n\n"
+            f"👤 <b>ID:</b> <code>{user_id}</code>\n"
+            f"📥 <b>Total Downloads:</b> {user_data[0]}\n"
+            f"🚫 <b>Blocked:</b> {is_blocked}\n"
+            f"⏱ <b>Last Active:</b> {last_seen}"
+        )
+        await message.answer(info)
+    else:
+        await message.answer("⚠️ User not found in database.")
+    await state.clear()
+
 @dp.message(AdminStates.waiting_for_channel)
 async def process_channel(message: types.Message, state: FSMContext):
-    if message.text.startswith('/'): return await message.answer("❌ Invalid input. Please send text, not a command.")
-    await set_setting("force_channel", message.text.strip())
-    await message.answer(f"✅ Force channel successfully updated to: {message.text}")
+    text = message.text.strip()
+    if text.startswith('/') and text != "/start": 
+        return await message.answer("❌ Invalid input.")
+    if text.lower() == "none" or text.lower() == "off":
+        await set_setting("force_channel", "None")
+        await message.answer("✅ Force channel has been <b>DISABLED</b>.")
+    else:
+        if not text.startswith('@') and not text.startswith('http'):
+            text = f"@{text}" # Si toos ah @ ugu dar haddii uu iloobo
+        await set_setting("force_channel", text)
+        await message.answer(f"✅ Force channel successfully updated to: {text}")
     await state.clear()
 
 @dp.message(AdminStates.waiting_for_block)
 async def process_block(message: types.Message, state: FSMContext):
     if message.text.isdigit():
+        target_id = int(message.text)
         async with aiosqlite.connect('bot_database.db') as db:
-            await db.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (int(message.text),))
+            await db.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (target_id,))
+            await db.execute('UPDATE users SET is_blocked = 1 WHERE user_id = ?', (target_id,))
             await db.commit()
-        await message.answer(f"✅ User {message.text} has been blocked.")
+        await message.answer(f"✅ User {target_id} has been blocked.")
     else:
         await message.answer("❌ Invalid input. Please send a valid numeric ID.")
     await state.clear()
@@ -251,12 +302,14 @@ async def process_block(message: types.Message, state: FSMContext):
 @dp.message(AdminStates.waiting_for_unblock)
 async def process_unblock(message: types.Message, state: FSMContext):
     if message.text.isdigit():
+        target_id = int(message.text)
         async with aiosqlite.connect('bot_database.db') as db:
-            await db.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (int(message.text),))
+            await db.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (target_id,))
+            await db.execute('UPDATE users SET is_blocked = 0 WHERE user_id = ?', (target_id,))
             await db.commit()
-        await message.answer(f"✅ User {message.text} has been unblocked.")
+        await message.answer(f"✅ User {target_id} has been unblocked.")
     else:
-        await message.answer("❌ Invalid input. Please send a valid numeric ID.")
+        await message.answer("❌ Invalid input.")
     await state.clear()
 
 @dp.message(AdminStates.waiting_for_broadcast)
@@ -291,7 +344,14 @@ async def process_welcome_text(message: types.Message, state: FSMContext):
     if not message.text or message.text.startswith('/'):
         return await message.answer("❌ Invalid input. Please send proper text, not a command.")
     await set_setting("welcome_text", message.html_text)
-    await message.answer("✅ Welcome message successfully updated!")
+    
+    # Horudhac (Preview) tus admin-ka
+    current_channel = await get_setting("force_channel")
+    channel_display = "" if current_channel == "None" else current_channel
+    preview = message.html_text.replace("{name}", message.from_user.first_name).replace("{channel}", channel_display)
+    
+    await message.answer("✅ Welcome message successfully updated! Here is a preview:")
+    await message.answer(preview)
     await state.clear()
 
 @dp.message(AdminStates.waiting_for_new_admin)
@@ -305,14 +365,19 @@ async def process_new_admin(message: types.Message, state: FSMContext):
         await message.answer("❌ Invalid input. Please send a valid numeric ID.")
     await state.clear()
 
+# ==========================================
+# 3. USER INTERFACE & DOWNLOADER
+# ==========================================
 async def check_subscription(user_id, channel_username):
     if not channel_username or channel_username == "None":
         return True
+    
+    clean_username = channel_username if channel_username.startswith('@') else f"@{channel_username}"
     try:
-        member = await bot.get_chat_member(chat_id=channel_username, user_id=user_id)
+        member = await bot.get_chat_member(chat_id=clean_username, user_id=user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except Exception:
-        return True 
+    except Exception as e:
+        return True # Hadii botku uusan admin ahayn channelka, wuu fasaxayaa qofka
 
 @dp.message(CommandStart())
 async def send_welcome(message: types.Message, state: FSMContext):
@@ -321,24 +386,24 @@ async def send_welcome(message: types.Message, state: FSMContext):
     await update_activity(user_id)
     
     try:
-        await message.answer_sticker("CAACAgIAAxkBAAE...")
+        await message.answer_sticker("CAACAgIAAxkBAAE... (Geli Sticker ID)")
     except:
         pass 
     
     current_channel = await get_setting("force_channel")
+    channel_display = "" if current_channel == "None" else current_channel
     raw_welcome = await get_setting("welcome_text")
-    welcome_text = raw_welcome.replace("{name}", message.from_user.first_name).replace("{channel}", current_channel)
+    welcome_text = raw_welcome.replace("{name}", message.from_user.first_name).replace("{channel}", channel_display)
+    
     await message.answer(text=welcome_text)
 
 @dp.message(F.text)
 async def process_video(message: types.Message, state: FSMContext):
     current_state = await state.get_state()
-    if current_state is not None:
-        return 
+    if current_state is not None: return 
 
     url_match = re.search(r'(https?://[^\s]+)', message.text)
-    if not url_match or "tiktok" not in url_match.group(1).lower():
-        return 
+    if not url_match or "tiktok" not in url_match.group(1).lower(): return 
     
     extracted_url = url_match.group(1)
     user_id = message.from_user.id
@@ -351,82 +416,12 @@ async def process_video(message: types.Message, state: FSMContext):
         async with db.execute('SELECT is_blocked, downloads FROM users WHERE user_id = ?', (user_id,)) as cursor:
             user_data = await cursor.fetchone()
             
-    if user_data and user_data[0] == 1: 
-        return
+    if user_data and user_data[0] == 1: return
         
     downloads = user_data[1] if user_data else 0
     limit = int(await get_setting("download_limit"))
     current_channel = await get_setting("force_channel")
     
-    if limit > 0 and downloads >= limit:
-        is_subbed = await check_subscription(user_id, current_channel)
-        if not is_subbed:
-            builder = InlineKeyboardBuilder()
-            clean_url = current_channel.replace('@', '')
-            builder.button(text="✅ Subscribe", url=f"https://t.me/{clean_url}")
-            limit_txt = (
-                "⚠️ <b>Download Limit Reached!</b>\n\n"
-                f"Please subscribe to our channel below to unlock unlimited downloads.\n\n"
-                f"📢 {current_channel}"
-            )
-            return await message.answer(limit_txt, reply_markup=builder.as_markup())
-
-    await bot.send_chat_action(chat_id=message.chat.id, action=ChatAction.UPLOAD_VIDEO)
-
-    api_url = f"https://www.tikwm.com/api/?url={extracted_url}&hd=1"
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.get(api_url) as response:
-                data = await response.json()
-
-        if data.get("code") == 0: 
-            video_url = data["data"]["play"]
-            music_url = data["data"].get("music", "")
-            likes = data["data"].get("digg_count", 0)
-            views = data["data"].get("play_count", 0)
-
-            builder = InlineKeyboardBuilder()
-            builder.button(text=f"❤️ {likes:,}", callback_data="noop")
-            builder.button(text=f"👁 {views:,}", callback_data="noop")
-            if music_url:
-                builder.button(text="🎵 Get Sound", url=music_url)
-            builder.adjust(2, 1)
-            
-            await bot.send_video(chat_id=message.chat.id, video=video_url, reply_markup=builder.as_markup())
-            
-            async with aiosqlite.connect('bot_database.db') as db:
-                await db.execute('UPDATE users SET downloads = downloads + 1 WHERE user_id = ?', (user_id,))
-                await db.execute('UPDATE settings SET value = CAST(value AS INTEGER) + 1 WHERE key = "total_links"')
-                await db.commit()
-        else:
-            await message.answer("❌ Invalid TikTok link or video is private. Please try again.")
-            
-    except Exception:
-        await message.answer("❌ Connection error. Please try again later.")
-
-@dp.callback_query(F.data == "noop")
-async def noop_callback(callback: types.CallbackQuery):
-    await callback.answer()
-
-async def health_check(request):
-    return web.Response(text="VidClean HD is running perfectly!")
-
-async def main():
-    await init_db()
-    
-    app = web.Application()
-    app.router.add_get('/', health_check)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    
-    port = int(os.environ.get('PORT', 10000))
-    site = web.TCPSite(runner, '0.0.0.0', port)
-    await site.start()
-    
-    print("Bot is ready and running flawlessly!")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
-    
+    # Admins bypass the limit and channel check
+    if not await is_admin(user_id):
+        if limit > 0 and do
